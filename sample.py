@@ -420,27 +420,27 @@ class PeSample(Sample):
     def analyze_resources(self):
         resources = self.binary.resources
         resource_types = {
-            1: "CURSOR",
-            2: "BITMAP",
-            3: "ICON",
-            4: "MENU",
-            5: "DIALOG",
-            6: "STRING",
-            7: "FONTDIR",
-            8: "FONT",
-            9: "ACCELERATOR",
-            10: "RCDATA",
-            11: "MESSAGETABLE",
-            12: "GROUP_CURSOR",
-            14: "GROUP_ICON",
-            16: "VERSION",
-            17: "DLGINCLUDE",
-            19: "PLUGPLAY",
-            20: "VXD",
-            21: "ANICURSOR",
-            22: "ANIICON",
-            23: "HTML",
-            24: "MANIFEST"
+            1: ("CURSOR", ".cur"),
+            2: ("BITMAP", ".bmp"),
+            3: ("ICON", ".ico"),
+            4: ("MENU", ".rc"),
+            5: ("DIALOG", ".dlg"),
+            6: ("STRING", ".txt"),
+            7: ("FONTDIR", ".fnt"),
+            8: ("FONT", ".fon"),
+            9: ("ACCELERATOR", ".rc"),
+            10: ("RCDATA", ".bin"),
+            11: ("MESSAGETABLE", ".bin"),
+            12: ("GROUP_CURSOR", ".cur"),
+            14: ("GROUP_ICON", ".ico"),
+            16: ("VERSION", ".txt"),
+            17: ("DLGINCLUDE", ".dlg"),
+            19: ("PLUGPLAY", ".bin"),
+            20: ("VXD", ".vxd"),
+            21: ("ANICURSOR", ".ani"),
+            22: ("ANIICON", ".ani"),
+            23: ("HTML", ".html"),
+            24: ("MANIFEST", ".xml")
         }
 
         if resources:
@@ -453,7 +453,8 @@ class PeSample(Sample):
 
             # Dump resources
             for resource_type in resources.childs:
-                type_name = resource_types.get(resource_type.id, f"Unknown ({resource_type.id})")
+                type_info = resource_types.get(resource_type.id, f"Unknown ({resource_type.id})")
+                type_name, type_ext = type_info
                 for resource_id in resource_type.childs:
                     for resource_lang in resource_id.childs:
                         content = bytes(resource_lang.content)
@@ -468,7 +469,7 @@ class PeSample(Sample):
                         print(f"    > Entropy: {entropy:.2f}")
 
                         # Extract resource to file
-                        output_path = os.path.join(resources_dir, f"resource_{type_name}_{resource_id.id}.bin")
+                        output_path = os.path.join(resources_dir, f"resource_{type_name}_{resource_id.id}{type_ext}")
                         with open(output_path, 'wb') as f:
                             f.write(bytes(resource_lang.content))
                         print(f"    > Extracted to: {output_path}")
