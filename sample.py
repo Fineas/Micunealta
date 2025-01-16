@@ -2,13 +2,17 @@ import re
 import os
 import lief
 import math
+import magic
 import base64
+import hashlib
 import subprocess
 from report import Report
+from datetime import datetime
 from abc import ABC, abstractmethod
 
 supported_obfuscations = ["UPX"]
 resources_dir = "dumped_resources"
+local_func_datasets = ['datasets/pe_suspicious_function_names.txt', 'datasets/elf_suspicious_function_names.txt', 'datasets/macho_suspicious_function_names.txt']
 
 class Sample(ABC):
     def __init__(self, filepath):
@@ -17,6 +21,9 @@ class Sample(ABC):
         self.strings = self.dump_strings()
         self.report = Report()
 
+    """
+    Load the sample as lief.Binary
+    """
     def load(self):
         return lief.parse(self.filepath)
 
@@ -34,6 +41,48 @@ class Sample(ABC):
 
         return [s.decode('utf-8', errors='replace') for s in found]
     
+    def anatomy(self):
+        print("[*] Anatomy:")
+        # Calculate hashes
+        with open(self.filepath, 'rb') as f:
+            data = f.read()
+            print(f"    > MD5: {hashlib.md5(data).hexdigest()}")
+            print(f"    > SHA-1: {hashlib.sha1(data).hexdigest()}")
+            print(f"    > SHA-256: {hashlib.sha256(data).hexdigest()}")
+        
+        # File properties
+        print(f"    > File Type: {magic.from_file(self.filepath)}")
+        print(f"    > Magic: {magic.from_file(self.filepath, mime=True)}")
+        print(f"    > File Size: {os.path.getsize(self.filepath)} bytes")
+
+        print("\n    [*] History")
+        stat = os.stat(self.filepath)
+        print(f"    > Creation Time: {datetime.fromtimestamp(stat.st_ctime)}")
+        print(f"    > Last Access Time: {datetime.fromtimestamp(stat.st_atime)}")
+
+        print("\n    [*] Header Information")
+        self.analyze_metadata()
+
+        print("\n    [*] Sections")
+        for section in self.binary.sections:
+            print(f"\n        [*] Section: {section.name}")
+            print(f"        > Virtual Address: {hex(section.virtual_address)}")
+            print(f"        > Virtual Size: {hex(section.virtual_size)}")
+            print(f"        > Raw Size: {hex(section.size)}")
+            entropy = self.calculate_entropy(section.content)
+            print(f"        > Entropy: {entropy:.2f}")
+            section_md5 = hashlib.md5(bytes(section.content)).hexdigest()
+            print(f"        > MD5: {section_md5}")
+
+        print("\n    [*] Imports")
+        for imp in self.binary.imports:
+            print(f"    > {imp.name}")
+
+        print("\n    [*] Resources")
+        self.analyze_resources()
+
+
+
     """
     Compute the entropy of a memory region
     """
@@ -184,9 +233,23 @@ class Sample(ABC):
         except FileNotFoundError:
             print("[!] Binwalk not found in system path")
 
-    @abstractmethod
-    def analyze_functions(self):
-        pass
+    def analyze_functions(self, dataset_name):
+        # Load suspicious functions dataset
+        with open(dataset_name, 'r') as f:
+            suspicious_functions = set(line.strip() for line in f)
+        
+        found_suspicious = []
+        
+        # Check imported functions against suspicious list
+        for imp in self.binary.imports:
+            for func in imp.entries:
+                if func.name in suspicious_functions:
+                    found_suspicious.append(func.name)
+        
+        if found_suspicious:
+            print("[*] Suspicious functions found:")
+            for func in found_suspicious:
+                print(f"    > {func}")
 
     @abstractmethod
     def analyze_metadata(self):
@@ -216,12 +279,9 @@ class Sample(ABC):
             - If a new memory region is mapped and executed
             - If we successfully decoded an obfuscated binary 
     """
+    @abstractmethod
     def static_analysis(self):
-        self.detect_obfuscation()
-        self.analyze_strings()
-        self.analyze_functions()
-        self.analyze_metadata()
-        self.analyze_resources()
+        pass
 
     """
     STEP 5
@@ -249,42 +309,63 @@ class Sample(ABC):
         if pdf_dump:
             self.report.export_pdf(f"{self.filepath}_report.pdf")
 
+"""
++---------------------------------+
+| Sample Class for the ELF Format |
++---------------------------------+
+"""
 class ElfSample(Sample):
-    def analyze_functions(self):
-        # Analyze functions and API calls
-        for function in self.binary.functions:
-            print(f"Function: {function.name}")
+    def static_analysis(self):
+        self.anatomy()
+        self.detect_obfuscation()
+        self.analyze_functions(local_func_datasets[1])
 
     def analyze_metadata(self):
-        # Analyze ELF headers
-        print(f"Entry point: {self.binary.header.entrypoint}")
+        print("[*] ELF Header Analysis")
+        header = self.binary.header
+        
+        for field in dir(header):
+            if not field.startswith('_'):
+                value = getattr(header, field)
+                if not callable(value):
+                    if isinstance(value, int):
+                        print(f"    > {field}: {hex(value)}")
+                    else:
+                        print(f"    > {field}: {value}")
+        
+        print(f"\n    [*] Entry Point: {hex(self.binary.entrypoint)}")
+        print("\n    [*] Sections:")
+        for section in self.binary.sections:
+            print(f"      {section.name}")
 
     def analyze_resources(self):
-        # ELF typically doesn't have resources like PE
-        print("No resources to analyze in ELF.")
+        print("[*] ELF Resources Analysis")
+        # ELF binaries store resources in sections
+        for section in self.binary.sections:
+            if section.size > 0:
+                content = bytes(section.content)
+                sha256 = hashlib.sha256(content).hexdigest()
+                file_type = magic.from_buffer(content)
+                entropy = self.calculate_entropy(content)
+                
+                print(f"\n    [*] Section: {section.name}")
+                print(f"    > SHA-256: {sha256}")
+                print(f"    > File Type: {file_type}")
+                print(f"    > Size: {hex(section.size)}")
+                print(f"    > Entropy: {entropy:.2f}")
 
+"""
++--------------------------------+
+| Sample Class for the PE Format |
++--------------------------------+
+"""
 class PeSample(Sample):
-    def analyze_functions(self):
-        # Load suspicious functions dataset
-        with open('datasets/pe_suspicious_function_names.txt', 'r') as f:
-            suspicious_functions = set(line.strip() for line in f)
-        
-        found_suspicious = []
-        
-        # Check imported functions against suspicious list
-        for imp in self.binary.imports:
-            for func in imp.entries:
-                if func.name in suspicious_functions:
-                    found_suspicious.append(func.name)
-        
-        if found_suspicious:
-            print("[*] Suspicious functions found:")
-            for func in found_suspicious:
-                print(f"   {func}")
+    def static_analysis(self):
+        self.anatomy()
+        self.detect_obfuscation()
+        self.analyze_functions(local_func_datasets[0])
 
     def analyze_metadata(self):
-        # Analyze PE headers
-        print("[*] PE Optional Header Analysis")
         header = self.binary.optional_header
         
         for field in dir(header):
@@ -292,21 +373,18 @@ class PeSample(Sample):
                 value = getattr(header, field)
                 if not callable(value):  # Skip methods
                     if isinstance(value, int):
-                        print(f"{field}: {hex(value)}")
+                        print(f"    > {field}: {hex(value)}")
                     else:
-                        print(f"{field}: {value}")
-            
-        # Check compilation timestamp
-        print(f"Compilation Timestamp: {self.binary.header.time_date_stamps}")
+                        print(f"    > {field}: {value}")
         
-        # Check for digital signatures
-        if self.binary.has_signatures:
-            print("[*] Digital signature found")
-        else:
-            print("[!] No digital signature")
+        print(f"\n    [*] Compilation Timestamp: {self.binary.header.time_date_stamps}")
+        print(f"    [*] Entry Point: {hex(self.binary.optional_header.addressof_entrypoint)}")
+        
+        print("\n    [*] Sections:")
+        for section in self.binary.sections:
+            print(f"    > {section.name}")
 
     def analyze_resources(self):
-        print("[*] Resource Analysis")
         resources = self.binary.resources
         resource_types = {
             1: "CURSOR",
@@ -331,8 +409,8 @@ class PeSample(Sample):
             23: "HTML",
             24: "MANIFEST"
         }
-        if resources:
 
+        if resources:
             # Create / Clean dumped_resources directory
             if os.path.exists(resources_dir):
                 for file in os.listdir(resources_dir):
@@ -345,38 +423,66 @@ class PeSample(Sample):
                 type_name = resource_types.get(resource_type.id, f"Unknown ({resource_type.id})")
                 for resource_id in resource_type.childs:
                     for resource_lang in resource_id.childs:
-                        print(f"   Resource type: {type_name} {resource_type.id}")
-                        print(f"   Resource id: {resource_id.id}")
-                        print(f"   Resource lang: {resource_lang.id}")
-                        print(f"   Resource size: {len(resource_lang.content)} bytes")
+                        content = bytes(resource_lang.content)
+                        sha256 = hashlib.sha256(content).hexdigest()
+                        file_type = magic.from_buffer(content)
+                        entropy = self.calculate_entropy(content)
                         
-                        if len(resource_lang.content) > 1000000:
-                            print(f"[!] Large resource detected: {len(resource_lang.content)} bytes")
-                            
-                        entropy = self.calculate_entropy(resource_lang.content)
-                        if entropy > 7.0:
-                            print(f"[!] High entropy resource: {entropy:.2f}")
+                        print(f"\n    > Type: {type_name}")
+                        print(f"    > SHA-256: {sha256}")
+                        print(f"    > File Type: {file_type}")
+                        print(f"    > Language: {resource_lang.id}")
+                        print(f"    > Entropy: {entropy:.2f}")
 
                         # Extract resource to file
                         output_path = os.path.join(resources_dir, f"resource_{type_name}_{resource_id.id}.bin")
                         with open(output_path, 'wb') as f:
                             f.write(bytes(resource_lang.content))
-                        print(f"   Extracted to: {output_path}")
+                        print(f"    > Extracted to: {output_path}")
+            print()
         else:
-            print("[!] No resources found")
+            print("    [!] No resources found\n")
 
-
-
+"""
++-----------------------------------+
+| Sample Class for the Macho Format |
++-----------------------------------+
+"""
 class MachoSample(Sample):
-    def analyze_functions(self):
-        # Analyze functions and API calls
-        for function in self.binary.symbols:
-            print(f"Symbol: {function.name}")
+    def static_analysis(self):
+        self.anatomy()
+        self.detect_obfuscation()
+        self.analyze_functions(local_func_datasets[2])
 
     def analyze_metadata(self):
-        # Analyze Mach-O headers
-        print(f"Entry point: {self.binary.entrypoint}")
+        header = self.binary.header
+        
+        for field in dir(header):
+            if not field.startswith('_'):
+                value = getattr(header, field)
+                if not callable(value):
+                    if isinstance(value, int):
+                        print(f"    > {field}: {hex(value)}")
+                    else:
+                        print(f"    > {field}: {value}")
+        
+        print(f"\n    [*] Entry Point: {hex(self.binary.entrypoint)}")
+        print("\n    [*] Segments:")
+        for segment in self.binary.segments:
+            print(f"       > {segment.name}")
 
     def analyze_resources(self):
-        # Mach-O typically doesn't have resources like PE
-        print("No resources to analyze in Mach-O.")
+        # Mach-O resources are typically in the __DATA segment
+        for segment in self.binary.segments:
+            if segment.name == "__DATA":
+                for section in segment.sections:
+                    content = bytes(section.content)
+                    sha256 = hashlib.sha256(content).hexdigest()
+                    file_type = magic.from_buffer(content)
+                    entropy = self.calculate_entropy(content)
+                    
+                    print(f"\n    [*] Section: {section.name}")
+                    print(f"    > SHA-256: {sha256}")
+                    print(f"    > File Type: {file_type}")
+                    print(f"    > Size: {hex(section.size)}")
+                    print(f"    > Entropy: {entropy:.2f}")
