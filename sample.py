@@ -21,11 +21,13 @@ class Sample(ABC):
         self.strings = self.dump_strings()
         self.report = Report()
 
+
     """
     Load the sample as lief.Binary
     """
     def load(self):
         return lief.parse(self.filepath)
+
 
     """
     Extract printable strings from the binary
@@ -41,6 +43,22 @@ class Sample(ABC):
 
         return [s.decode('utf-8', errors='replace') for s in found]
     
+
+    """
+    Wrapper to extract Details about the sample such as:
+        Basic properties: 
+            - MD5, SHA-1, SHA-256, File Type, Magic, File Size
+        History:
+            - Creation Date, Last Accessed Date
+        Header:
+            - Optional Header, Entry Point, Compilation Time
+        Sections:
+            - List all sections
+        Imports:
+            - List all imports
+        Resources:
+            - SHA-256, File Type, Type, Language, Entropy
+    """
     def anatomy(self):
         print("[*] Anatomy:")
         # Calculate hashes
@@ -82,7 +100,6 @@ class Sample(ABC):
         self.analyze_resources()
 
 
-
     """
     Compute the entropy of a memory region
     """
@@ -95,6 +112,7 @@ class Sample(ABC):
             if p_x > 0:
                 entropy += - p_x * math.log2(p_x)
         return entropy
+
 
     """
     Parse the binary computing an entropy score 
@@ -127,6 +145,7 @@ class Sample(ABC):
                             print("[!] UPX not found")
                     except FileNotFoundError:
                         print("[!] UPX is not installed or not found in the system path.")
+
 
     """
     Analyze and categorize strings extracted from the binary:
@@ -208,6 +227,9 @@ class Sample(ABC):
             for o in others:
                 print(f"   {o}")
 
+    """
+    Routine to unpack known packing methods
+    """
     def unpack(self, packing_method):
         if packing_method.lower() == 'upx':
             try:
@@ -220,6 +242,7 @@ class Sample(ABC):
                 print("UPX is not installed or not found in the system path.")
         else:
             print(f"Packing method '{packing_method}' is not supported.")
+
 
     """
     Check for embedded files in the binary using binwalk
@@ -251,13 +274,16 @@ class Sample(ABC):
             for func in found_suspicious:
                 print(f"    > {func}")
 
+
     @abstractmethod
     def analyze_metadata(self):
         pass
 
+
     @abstractmethod
     def analyze_resources(self):
         pass    
+
 
     """
     STEP 4
@@ -283,6 +309,7 @@ class Sample(ABC):
     def static_analysis(self):
         pass
 
+
     """
     STEP 5
         Part 1: DYNAMIC ANALYSIS
@@ -303,11 +330,16 @@ class Sample(ABC):
     def dynamic_analysis(self):
         pass
 
+
+    """
+    Cast findings to the Report class and save the results
+    """
     def results(self, json_dump, pdf_dump):
         if json_dump:
             self.report.export_json(f"{self.filepath}_report.json")
         if pdf_dump:
             self.report.export_pdf(f"{self.filepath}_report.pdf")
+
 
 """
 +---------------------------------+
@@ -353,6 +385,7 @@ class ElfSample(Sample):
                 print(f"    > File Type: {file_type}")
                 print(f"    > Size: {hex(section.size)}")
                 print(f"    > Entropy: {entropy:.2f}")
+
 
 """
 +--------------------------------+
@@ -442,6 +475,7 @@ class PeSample(Sample):
             print()
         else:
             print("    [!] No resources found\n")
+
 
 """
 +-----------------------------------+
